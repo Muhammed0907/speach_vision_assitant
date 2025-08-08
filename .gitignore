@@ -1,0 +1,130 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+ENV/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+logs/
+temp/
+tmp/
+
+# Media and data files (often large and not needed in version control)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.mp3
+*.mp4
+*.avi
+*.mov
+*.wav
+*.flac
+*.ogg
+
+# Saved frames and captured images
+saved_frames/
+frames/
+captured/
+screenshots/
+
+# Model files and weights (often large)
+*.pth
+*.pt
+*.onnx
+*.pb
+models/
+weights/
+
+# Configuration files with sensitive data
+config.ini
+.env
+*.key
+*.pem
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*_backup/
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Documentation build
+docs/_build/
+site/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Rope project settings
+.ropeproject/
+
+# mkdocs documentation
+/site
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Project specific
+res.txt
+rm.md
+*.bat
+*.sh

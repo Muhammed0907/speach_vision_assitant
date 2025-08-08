@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Vision Speech Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shundaopi
+Group=shundaopi
+WorkingDirectory=/home/shundaopi/Projects/ai_vision_speach
+ExecStart=/bin/bash /home/shundaopi/Projects/ai_vision_speach/run.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=HOME=/home/shundaopi
+Environment=USER=shundaopi
+Environment=PATH=/home/shundaopi/.cargo/bin:/home/shundaopi/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target
