@@ -13,6 +13,9 @@ import threading
 import time
 import base64
 import cv2
+import hashlib
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Dashscope imports
@@ -54,8 +57,16 @@ class QwenAI:
         self.stop_event = threading.Event()
         self.now_speaking = threading.Lock()
         
+        # TTS Cache setup
+        self.cache_dir = Path("tts_cache")
+        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_index_file = self.cache_dir / "cache_index.json"
+        self.cache_index = self._load_cache_index()
+        
         print(f"QwenAI initialized with model: {self.model_use}")
         print(f"Using API key: {self.api_key[:8]}...")
+        print(f"TTS cache initialized at: {self.cache_dir}")
+        print(f"Cache contains {len(self.cache_index)} entries")
     
     def init_dashscope_api_key(self):
         """
@@ -68,6 +79,96 @@ class QwenAI:
             dashscope.api_key = self.api_key
             print(f"Using MODEL_API_KEY for Dashscope: {self.api_key[:8]}...")
     
+    def _load_cache_index(self):
+        """Load the TTS cache index from disk"""
+        if self.cache_index_file.exists():
+            try:
+                with open(self.cache_index_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading cache index: {e}")
+                return {}
+        return {}
+    
+    def _save_cache_index(self):
+        """Save the TTS cache index to disk"""
+        try:
+            with open(self.cache_index_file, 'w', encoding='utf-8') as f:
+                json.dump(self.cache_index, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving cache index: {e}")
+    
+    def _get_text_hash(self, text, voice='longke', model='cosyvoice-v1'):
+        """Generate a hash for the text and voice combination"""
+        hash_input = f"{text}_{voice}_{model}".encode('utf-8')
+        return hashlib.md5(hash_input).hexdigest()
+    
+    def _is_cache_valid(self, cache_path):
+        """Check if a cached file exists and is valid"""
+        return cache_path.exists() and cache_path.stat().st_size > 0
+    
+    def _get_cached_audio(self, text_hash):
+        """Get cached audio file path if it exists and is valid"""
+        if text_hash in self.cache_index:
+            cache_info = self.cache_index[text_hash]
+            cache_path = Path(cache_info['file_path'])
+            if self._is_cache_valid(cache_path):
+                return cache_path
+            else:
+                # Remove invalid cache entry
+                del self.cache_index[text_hash]
+                self._save_cache_index()
+        return None
+    
+    def _save_to_cache(self, text_hash, text, audio_data, voice='longke', model='cosyvoice-v1'):
+        """Save audio data to cache"""
+        try:
+            cache_filename = f"{text_hash}.mp3"
+            cache_path = self.cache_dir / cache_filename
+            
+            with open(cache_path, 'wb') as f:
+                f.write(audio_data)
+            
+            # Update cache index
+            self.cache_index[text_hash] = {
+                'text': text,
+                'voice': voice,
+                'model': model,
+                'file_path': str(cache_path),
+                'created_at': time.time()
+            }
+            self._save_cache_index()
+            
+            print(f"Cached TTS for text: '{text[:50]}...' -> {cache_filename}")
+            return cache_path
+        except Exception as e:
+            print(f"Error saving to cache: {e}")
+            return None
+    
+    def _play_cached_audio(self, cache_path):
+        """Play cached audio file"""
+        try:
+            player = RealtimeMp3Player(verbose=True)
+            player.start()
+            
+            with open(cache_path, 'rb') as f:
+                audio_data = f.read()
+                
+            # Play audio in chunks to simulate streaming
+            chunk_size = 4096
+            for i in range(0, len(audio_data), chunk_size):
+                if self.stop_event.is_set():
+                    break
+                chunk = audio_data[i:i + chunk_size]
+                player.write(chunk)
+                time.sleep(0.01)  # Small delay to simulate streaming
+            
+            player.stop()
+            return True
+        except Exception as e:
+            print(f"Error playing cached audio: {e}")
+            return False
+
     def encode_image(self, image_data):
         """Encode image data to base64 string"""
         _, buffer = cv2.imencode('.jpg', image_data)
@@ -151,16 +252,31 @@ class QwenAI:
             print(f"LLM Gender API error: {e}")
             return 'unknown'
     
-    def synthesis_text_to_speech_and_play_by_streaming_mode(self, text):
+    def synthesis_text_to_speech_and_play_by_streaming_mode(self, text, voice='longke', model='cosyvoice-v1'):
         """
         Synthesize speech with given text by streaming mode and play audio in real-time
-        Uses cosyvoice-v1 model
+        Uses cosyvoice-v1 model with caching support
         
         Args:
             text: Text to synthesize and play
+            voice: Voice to use (default: 'longke')
+            model: TTS model to use (default: 'cosyvoice-v1')
         """
         # Update the last assistant response for echo detection
         self.last_assistant_response = text
+        
+        # Check cache first
+        text_hash = self._get_text_hash(text, voice, model)
+        cached_audio_path = self._get_cached_audio(text_hash)
+        
+        if cached_audio_path:
+            print(f'Playing cached TTS for: "{text[:50]}..."')
+            if self._play_cached_audio(cached_audio_path):
+                return
+            else:
+                print("Failed to play cached audio, generating new TTS...")
+        
+        print(f'Generating TTS for: "{text[:50]}..."')
         
         player = RealtimeMp3Player(verbose=True)
         # Start player with error handling
@@ -172,19 +288,25 @@ class QwenAI:
         
         complete_event = threading.Event()
         
-        # Capture the outer self reference for the callback
+        # Capture the outer self reference for the callback and collect audio data for caching
         outer_self = self
+        audio_chunks = []
         
-        class Callback(ResultCallback):
+        class CachingCallback(ResultCallback):
             def on_open(self):
                 print('websocket is open.')
             
             def on_complete(self):
                 print('speech synthesis task complete successfully.')
+                # Save to cache
+                if audio_chunks:
+                    audio_data = b''.join(audio_chunks)
+                    outer_self._save_to_cache(text_hash, text, audio_data, voice, model)
                 complete_event.set()
             
             def on_error(self, message: str):
                 print(f'speech synthesis task failed, {message}')
+                complete_event.set()
             
             def on_close(self):
                 print('websocket is closed.')
@@ -193,15 +315,17 @@ class QwenAI:
                 pass
             
             def on_data(self, data: bytes) -> None:
+                # Store audio data for caching
+                audio_chunks.append(data)
                 # Access stop_event from the captured outer self
                 if not outer_self.stop_event.is_set():
                     player.write(data)
         
         # Initialize speech synthesizer
-        synthesizer_callback = Callback()
+        synthesizer_callback = CachingCallback()
         speech_synthesizer = SpeechSynthesizer(
-            model='cosyvoice-v1',
-            voice='longke',
+            model=model,
+            voice=voice,
             callback=synthesizer_callback
         )
         
@@ -329,6 +453,64 @@ class QwenAI:
                     print(f"Error in player.stop: {e}")
                 # Ensure lock is released
                 self.now_speaking.release()
+    
+    def get_cache_stats(self):
+        """Get TTS cache statistics"""
+        total_entries = len(self.cache_index)
+        total_size = 0
+        valid_entries = 0
+        
+        for text_hash, cache_info in self.cache_index.items():
+            cache_path = Path(cache_info['file_path'])
+            if self._is_cache_valid(cache_path):
+                valid_entries += 1
+                total_size += cache_path.stat().st_size
+        
+        return {
+            'total_entries': total_entries,
+            'valid_entries': valid_entries,
+            'invalid_entries': total_entries - valid_entries,
+            'total_size_mb': round(total_size / (1024 * 1024), 2),
+            'cache_dir': str(self.cache_dir)
+        }
+    
+    def clear_cache(self, older_than_days=None):
+        """Clear TTS cache entries
+        
+        Args:
+            older_than_days: If specified, only clear entries older than this many days
+        """
+        cleared_count = 0
+        current_time = time.time()
+        
+        entries_to_remove = []
+        
+        for text_hash, cache_info in self.cache_index.items():
+            should_remove = False
+            
+            if older_than_days:
+                created_at = cache_info.get('created_at', 0)
+                age_days = (current_time - created_at) / (24 * 3600)
+                if age_days > older_than_days:
+                    should_remove = True
+            else:
+                should_remove = True
+            
+            if should_remove:
+                # Remove file
+                cache_path = Path(cache_info['file_path'])
+                if cache_path.exists():
+                    cache_path.unlink()
+                entries_to_remove.append(text_hash)
+                cleared_count += 1
+        
+        # Update index
+        for text_hash in entries_to_remove:
+            del self.cache_index[text_hash]
+        
+        self._save_cache_index()
+        print(f"Cleared {cleared_count} cache entries")
+        return cleared_count
 
 
 # Global instance for backward compatibility
@@ -343,9 +525,9 @@ def get_llm_gender(frame):
     """Convenience function for gender detection"""
     return qwen_ai.get_llm_gender(frame)
 
-def synthesis_text_to_speech_and_play_by_streaming_mode(text):
-    """Convenience function for TTS"""
-    return qwen_ai.synthesis_text_to_speech_and_play_by_streaming_mode(text)
+def synthesis_text_to_speech_and_play_by_streaming_mode(text, voice='longke', model='cosyvoice-v1'):
+    """Convenience function for TTS with caching support"""
+    return qwen_ai.synthesis_text_to_speech_and_play_by_streaming_mode(text, voice, model)
 
 def init_dashscope_api_key():
     """Convenience function for API key initialization"""
@@ -358,6 +540,14 @@ def LLM_Speak(system_prompt, user_query_queue=None):
         from speak import userQueryQueue
         user_query_queue = userQueryQueue
     return qwen_ai.llm_speak(system_prompt, user_query_queue)
+
+def get_tts_cache_stats():
+    """Get TTS cache statistics"""
+    return qwen_ai.get_cache_stats()
+
+def clear_tts_cache(older_than_days=None):
+    """Clear TTS cache"""
+    return qwen_ai.clear_cache(older_than_days)
 
 
 if __name__ == "__main__":
