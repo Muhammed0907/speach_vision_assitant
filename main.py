@@ -1,6 +1,5 @@
 from fetchDataFromAPI import fetch_product_by_name, check_listen_status
 import sys
-from listener import mic_listen
 import cv2
 import time
 import threading
@@ -16,17 +15,34 @@ from datetime import datetime, timedelta
 import base64
 from openai import OpenAI
 import subprocess
-from qwenai import get_emotion_response, get_llm_gender
+# Dynamic import based on MODEL_USE
+from dotenv import load_dotenv
+load_dotenv()
+MODEL_USE = os.getenv('MODEL_USE', 'qwen')
 
-from speak import ( init_dashscope_api_key, 
-                    synthesis_text_to_speech_and_play_by_streaming_mode, 
-                    LLM_Speak, 
+if MODEL_USE.lower() == 'google':
+    from googleai import (get_emotion_response, get_llm_gender, 
+                         synthesis_text_to_speech_and_play_by_streaming_mode,
+                         LLM_Speak, init_dashscope_api_key, mic_listen)
+else:
+    from qwenai import get_emotion_response, get_llm_gender
+    from listener import mic_listen
+
+from speak import ( init_dashscope_api_key as qwen_init_dashscope_api_key, 
+                    synthesis_text_to_speech_and_play_by_streaming_mode as qwen_tts, 
+                    LLM_Speak as qwen_llm_speak, 
                     userQueryQueue, 
                     LAST_ASSISTANT_RESPONSE, 
                     STOP_EVENT, 
                     NOW_SPEAKING,
                     USER_ABSENT,
                     SHOULD_LISTEN)
+
+# Use the appropriate functions based on MODEL_USE
+if MODEL_USE.lower() != 'google':
+    synthesis_text_to_speech_and_play_by_streaming_mode = qwen_tts
+    LLM_Speak = qwen_llm_speak
+    init_dashscope_api_key = qwen_init_dashscope_api_key
 
 from greetings import (male_greetings, 
                        female_greetings, 
@@ -1348,7 +1364,10 @@ def face_detection_loop():
 
 
 def get_user_input():
-    mic_listen()
+    if MODEL_USE.lower() == 'google':
+        mic_listen(userQueryQueue)  # Pass the queue for Google AI
+    else:
+        mic_listen()
     
 # def get_user_input():
 #     global userQueryQueue
@@ -1480,7 +1499,10 @@ if __name__ == "__main__":
     threading.Thread(target=auto_speak_loop, daemon=True).start()
     threading.Thread(target=listen_status_monitor, daemon=True).start()
     threading.Thread(target=charging_announcement_loop, args=(int(busy_speak_time),busy_speak,), daemon=True).start()  # Start charging announcement thread
-    threading.Thread(target=mic_listen, daemon=True).start()
+    if MODEL_USE.lower() == 'google':
+        threading.Thread(target=mic_listen, args=(userQueryQueue,), daemon=True).start()
+    else:
+        threading.Thread(target=mic_listen, daemon=True).start()
     # threading.Thread(target=get_user_input, daemon=True).start()
     
     print("Application started successfully!")
